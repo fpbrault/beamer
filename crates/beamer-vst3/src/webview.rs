@@ -12,6 +12,11 @@ use vst3::Steinberg::Vst::IComponentHandler;
 use vst3::Steinberg::*;
 use vst3::Class;
 
+#[cfg(target_os = "macos")]
+type SyncTimerHandle = *mut objc2::runtime::AnyObject;
+#[cfg(not(target_os = "macos"))]
+type SyncTimerHandle = *mut c_void;
+
 /// Shared context between WebViewPlugView and its IPC callbacks.
 ///
 /// This struct is heap-allocated and pinned. Raw pointers to it are passed
@@ -30,7 +35,7 @@ struct IpcContext {
     /// Set in attached(), cleared in removed().
     webview: *const PlatformWebView,
     /// NSTimer handle for parameter sync. Null when not running.
-    sync_timer: *mut objc2::runtime::AnyObject,
+    sync_timer: SyncTimerHandle,
 }
 
 /// VST3 IPlugView implementation backed by a platform WebView.
@@ -304,6 +309,7 @@ unsafe extern "C-unwind" fn on_loaded(context: *mut c_void) {
 }
 
 /// NSTimer callback for 60Hz parameter sync.
+#[cfg(target_os = "macos")]
 unsafe extern "C-unwind" fn sync_timer_fired(
     _this: *mut objc2::runtime::AnyObject,
     _cmd: objc2::runtime::Sel,

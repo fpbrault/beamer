@@ -1222,7 +1222,7 @@ where
                         CoreBusType::Aux => BusTypes_::kAux,
                     } as BusType;
                     bus.flags = if info.is_default_active {
-                        BusInfo_::BusFlags_::kDefaultActive
+                        BusInfo_::BusFlags_::kDefaultActive as u32
                     } else {
                         0
                     };
@@ -1250,7 +1250,7 @@ where
                 };
                 copy_wstring(name, &mut bus.name);
                 bus.busType = BusTypes_::kMain as BusType;
-                bus.flags = BusInfo_::BusFlags_::kDefaultActive;
+                bus.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
                 kResultOk
             }
             _ => kInvalidArgument,

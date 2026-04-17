@@ -1,13 +1,11 @@
 //! Windows WebView2 implementation.
 
 use std::ffi::c_void;
-use std::ptr;
 use std::sync::mpsc;
 
 use crate::error::{Result, WebViewError};
 use crate::mime::mime_for_path;
 use crate::WebViewConfig;
-use webview2_com::pwstr::take_pwstr;
 use webview2_com::{
         AddScriptToExecuteOnDocumentCreatedCompletedHandler,
         CreateCoreWebView2ControllerCompletedHandler,
@@ -27,9 +25,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_COLOR,
         COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
-use windows::core::{BOOL, Error as WindowsError, E_POINTER, Interface, PWSTR};
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::System::Com::{CoInitializeEx, IStream, COINIT_APARTMENTTHREADED};
+use windows::core::{BOOL, Error as WindowsError, Interface, PWSTR};
+use windows::Win32::Foundation::{E_FAIL, E_POINTER, HWND, RECT};
+use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, IStream, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
@@ -51,6 +49,17 @@ const BEAMER_RUNTIME_JS: &str = include_str!("beamer_runtime.js");
 
 const ASSET_BASE_URL: &str = "http://beamer.localhost";
 const ASSET_INDEX_URL: &str = "http://beamer.localhost/index.html";
+
+/// Convert a CoTask-allocated PWSTR to a String and free the memory.
+///
+/// Replacement for `webview2_com::pwstr::take_pwstr` which is no longer public.
+fn take_pwstr(source: PWSTR) -> String {
+    let result = unsafe { source.to_string() }.unwrap_or_default();
+    if !source.is_null() {
+        unsafe { CoTaskMemFree(Some(source.0.cast())) };
+    }
+    result
+}
 
 /// Windows WebView backed by WebView2.
 pub struct WindowsWebView {
@@ -262,10 +271,12 @@ impl WindowsWebView {
 }
 
 fn initialize_com() -> Result<()> {
-    match unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) } {
-        Ok(()) => Ok(()),
-        Err(err) if err.code().0 >= 0 => Ok(()),
-        Err(err) => Err(webview_error(err)),
+    // In windows-core 0.61+, CoInitializeEx returns HRESULT directly.
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if hr.is_ok() || hr.0 >= 0 {
+        Ok(())
+    } else {
+        Err(webview_error(WindowsError::from(hr)))
     }
 }
 
@@ -277,8 +288,7 @@ fn create_environment() -> Result<ICoreWebView2Environment> {
         }),
         Box::new(move |error_code, environment| {
             error_code?;
-            tx.send(environment.ok_or_else(|| WindowsError::from(E_POINTER)))
-                .map_err(|_| webview2_com::Error::SendError)?;
+            let _ = tx.send(environment.ok_or_else(|| WindowsError::from(E_POINTER)));
             Ok(())
         }),
     )
@@ -303,8 +313,9 @@ fn create_controller(
         }),
         Box::new(move |error_code, controller| {
             error_code?;
-            tx.send(controller.ok_or_else(|| WindowsError::from(E_POINTER)))
-                .map_err(|_| webview2_com::Error::SendError)?;
+            if tx.send(controller.ok_or_else(|| WindowsError::from(E_POINTER))).is_err() {
+                return Err(WindowsError::from(E_FAIL));
+            }
             Ok(())
         }),
     )
@@ -329,7 +340,7 @@ fn configure_controller(
         if let Ok(controller2) = controller.cast::<ICoreWebView2Controller2>() {
             let [r, g, b, a] = config.background_color;
             let color = COREWEBVIEW2_COLOR { A: a, R: r, G: g, B: b };
-            unsafe { controller2.SetDefaultBackgroundColor(&color) }.map_err(webview_error)?;
+            unsafe { controller2.SetDefaultBackgroundColor(color) }.map_err(webview_error)?;
         }
     }
 
@@ -382,7 +393,7 @@ fn create_response(
     let headers = CoTaskMemPWSTR::from(headers);
     unsafe {
         environment.CreateWebResourceResponse(
-            stream,
+            stream.as_ref(),
             status_code,
             *reason.as_ref().as_pcwstr(),
             *headers.as_ref().as_pcwstr(),

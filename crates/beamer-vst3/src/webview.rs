@@ -2,6 +2,7 @@
 
 use std::cell::UnsafeCell;
 use std::ffi::c_void;
+#[cfg(target_os = "macos")]
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -35,6 +36,7 @@ struct IpcContext {
     /// Set in attached(), cleared in removed().
     webview: *const PlatformWebView,
     /// NSTimer handle for parameter sync. Null when not running.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     sync_timer: SyncTimerHandle,
 }
 
